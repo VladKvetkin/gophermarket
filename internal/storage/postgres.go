@@ -230,7 +230,7 @@ func (s *PostgresStorage) GetOrCreateOrderIfNotExists(ctx context.Context, userI
 			order.UserID = userID
 		}
 
-		return order, true, err
+		return order, true, tx.Commit()
 	}
 
 	return order, false, tx.Commit()
