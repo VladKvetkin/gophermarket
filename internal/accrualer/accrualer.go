@@ -14,6 +14,7 @@ import (
 	"github.com/VladKvetkin/gophermart/internal/storage"
 	"github.com/go-resty/resty/v2"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -53,31 +54,48 @@ func (ac *Accrualer) Start(ctx context.Context) error {
 }
 
 func (ac *Accrualer) selectAndUpdateOrders(ctx context.Context) error {
-	orders, err := ac.storage.GetOrdersForAccrualer(ctx)
-	if err != nil {
-		return err
-	}
+	var (
+		ordersLimit   = 1000
+		workersNumber = 10
+	)
 
-	if len(orders) == 0 {
-		return nil
-	}
-
+	eg, ctx := errgroup.WithContext(ctx)
 	client := ac.initClient()
 
-	for _, order := range orders {
-		response, err := ac.checkOrderAccrual(client, order)
-		if err != nil {
-			zap.L().Info("error failed to check order accrual %w", zap.Error(err))
+	for i := 0; i < workersNumber; i++ {
+		i := i
+		eg.Go(func() error {
+			orders, err := ac.storage.GetOrdersForAccrualer(ctx, ordersLimit*i, ordersLimit)
+			if err != nil {
+				return err
+			}
 
-			continue
-		}
+			if len(orders) == 0 {
+				return nil
+			}
 
-		err = ac.updateOrder(ctx, order, response)
-		if err != nil {
-			zap.L().Info("error failed to update order accrual %w", zap.Error(err))
+			for _, order := range orders {
+				response, err := ac.checkOrderAccrual(client, order)
+				if err != nil {
+					zap.L().Info("error failed to check order accrual %w", zap.Error(err))
 
-			continue
-		}
+					continue
+				}
+
+				err = ac.updateOrder(ctx, order, response)
+				if err != nil {
+					zap.L().Info("error failed to update order accrual %w", zap.Error(err))
+
+					continue
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return err
 	}
 
 	return nil

@@ -30,7 +30,7 @@ type Storage interface {
 	CreateOrder(context.Context, string, string) (string, error)
 	CreateWithdraw(context.Context, string, string, int) (string, error)
 
-	GetOrdersForAccrualer(context.Context) ([]entities.Order, error)
+	GetOrdersForAccrualer(context.Context, int, int) ([]entities.Order, error)
 	UpdateOrder(context.Context, entities.Order, int, string) error
 
 	runMigrations(context.Context) error
@@ -80,10 +80,18 @@ func (s *PostgresStorage) UpdateOrder(ctx context.Context, order entities.Order,
 	return tx.Commit()
 }
 
-func (s *PostgresStorage) GetOrdersForAccrualer(ctx context.Context) ([]entities.Order, error) {
+func (s *PostgresStorage) GetOrdersForAccrualer(ctx context.Context, offset int, limit int) ([]entities.Order, error) {
 	var orders []entities.Order
 
-	err := s.db.SelectContext(ctx, &orders, "SELECT * FROM orders WHERE status NOT IN ($1,$2);", entities.OrderStatusProcessed, entities.OrderStatusInvalid)
+	err := s.db.SelectContext(
+		ctx,
+		&orders,
+		"SELECT * FROM orders WHERE status NOT IN ($1,$2) ORDER BY updated_at ASC LIMIT $3 OFFSET $4;",
+		entities.OrderStatusProcessed,
+		entities.OrderStatusInvalid,
+		limit,
+		offset,
+	)
 	if err != nil {
 		return nil, err
 	}
