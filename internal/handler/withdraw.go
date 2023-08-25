@@ -2,18 +2,20 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
-	"github.com/VladKvetkin/gophermart/internal/middleware"
 	"github.com/VladKvetkin/gophermart/internal/models"
 	"github.com/VladKvetkin/gophermart/internal/services/converter"
+	"github.com/VladKvetkin/gophermart/internal/services/validation"
+	"github.com/VladKvetkin/gophermart/internal/storage"
 	"go.uber.org/zap"
 )
 
 func (h *Handler) GetWithdrawals(res http.ResponseWriter, req *http.Request) {
-	userID, ok := req.Context().Value(middleware.UserIDKey{}).(string)
-	if !ok {
+	userID := h.getUserIDFromReqContext(req)
+	if userID == "" {
 		res.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -52,4 +54,51 @@ func (h *Handler) GetWithdrawals(res http.ResponseWriter, req *http.Request) {
 		res.WriteHeader(http.StatusInternalServerError)
 		zap.L().Info("cannot encode response JSON body: %w", zap.Error(err))
 	}
+}
+
+func (h *Handler) Withdraw(res http.ResponseWriter, req *http.Request) {
+	userID := h.getUserIDFromReqContext(req)
+	if userID == "" {
+		res.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	var balanceWithdrawRequest models.BalanceWithdrawRequest
+	decoder := json.NewDecoder(req.Body)
+	if err := decoder.Decode(&balanceWithdrawRequest); err != nil {
+		zap.L().Info("cannot decode request to json: %w", zap.Error(err))
+
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if balanceWithdrawRequest.Withdrawn == 0 {
+		zap.L().Info("balance withdrawn request with sum=0")
+
+		res.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if err := validation.LuhnValidate(balanceWithdrawRequest.OrderNumber); err != nil {
+		zap.L().Info("luhn validation failed: %w", zap.Error(err))
+
+		res.WriteHeader(http.StatusUnprocessableEntity)
+		return
+	}
+
+	if _, err := h.storage.CreateWithdraw(req.Context(), userID, balanceWithdrawRequest.OrderNumber, converter.ConvertAccrual(balanceWithdrawRequest.Withdrawn)); err != nil {
+		if errors.Is(err, storage.ErrNotEnoughAccrual) {
+			zap.L().Info("error not enough user accrual for withdrawn: %w", zap.Error(err))
+
+			res.WriteHeader(http.StatusPaymentRequired)
+			return
+		}
+
+		zap.L().Info("error create withdraw: %w", zap.Error(err))
+
+		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	res.WriteHeader(http.StatusOK)
 }

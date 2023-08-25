@@ -2,22 +2,19 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"time"
 
-	"github.com/VladKvetkin/gophermart/internal/middleware"
 	"github.com/VladKvetkin/gophermart/internal/models"
 	"github.com/VladKvetkin/gophermart/internal/services/converter"
 	"github.com/VladKvetkin/gophermart/internal/services/validation"
-	"github.com/VladKvetkin/gophermart/internal/storage"
 	"go.uber.org/zap"
 )
 
 func (h *Handler) SaveOrder(res http.ResponseWriter, req *http.Request) {
-	userID, ok := req.Context().Value(middleware.UserIDKey{}).(string)
-	if !ok {
+	userID := h.getUserIDFromReqContext(req)
+	if userID == "" {
 		res.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -39,23 +36,16 @@ func (h *Handler) SaveOrder(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	order, err := h.storage.GetOrderByNumber(req.Context(), orderNumberString)
+	order, isNewOrder, err := h.storage.GetOrCreateOrderIfNotExists(req.Context(), userID, orderNumberString)
 	if err != nil {
-		if errors.Is(err, storage.ErrNoRows) {
-			if _, err := h.storage.CreateOrder(req.Context(), userID, orderNumberString); err != nil {
-				zap.L().Info("error create order: %w", zap.Error(err))
-
-				res.WriteHeader(http.StatusInternalServerError)
-				return
-			} else {
-				res.WriteHeader(http.StatusAccepted)
-				return
-			}
-		}
-
-		zap.L().Info("error get order by number from database: %w", zap.Error(err))
+		zap.L().Info("error get or create order: %w", zap.Error(err))
 
 		res.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if isNewOrder {
+		res.WriteHeader(http.StatusAccepted)
 		return
 	}
 
@@ -68,8 +58,8 @@ func (h *Handler) SaveOrder(res http.ResponseWriter, req *http.Request) {
 }
 
 func (h *Handler) GetOrders(res http.ResponseWriter, req *http.Request) {
-	userID, ok := req.Context().Value(middleware.UserIDKey{}).(string)
-	if !ok {
+	userID := h.getUserIDFromReqContext(req)
+	if userID == "" {
 		res.WriteHeader(http.StatusUnauthorized)
 		return
 	}

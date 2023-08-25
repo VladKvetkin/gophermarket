@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"net/http"
-	"strings"
 
 	"github.com/VladKvetkin/gophermart/internal/services/jwttoken"
 )
@@ -14,11 +13,6 @@ const TokenCookieName = "token"
 
 func Auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
-		if isSkipCheckAuth(req.URL.Path) {
-			next.ServeHTTP(resp, req)
-			return
-		}
-
 		tokenCookie, err := req.Cookie(TokenCookieName)
 		if err != nil {
 			if err == http.ErrNoCookie {
@@ -40,8 +34,4 @@ func Auth(next http.Handler) http.Handler {
 
 		next.ServeHTTP(resp, req)
 	})
-}
-
-func isSkipCheckAuth(urlPath string) bool {
-	return strings.Contains(urlPath, "api/user/register") || strings.Contains(urlPath, "api/user/login")
 }
