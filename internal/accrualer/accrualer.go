@@ -35,7 +35,7 @@ func NewAccrualer(apiAddress string, storage storage.Storage) *Accrualer {
 }
 
 func (ac *Accrualer) Start(ctx context.Context) error {
-	ticker := time.NewTicker(3 * time.Minute)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	if err := ac.selectAndUpdateOrders(ctx); err != nil {
