@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/VladKvetkin/gophermart/internal/entities"
@@ -34,7 +35,7 @@ func NewAccrualer(apiAddress string, storage storage.Storage) *Accrualer {
 }
 
 func (ac *Accrualer) Start(ctx context.Context) error {
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(3 * time.Minute)
 	defer ticker.Stop()
 
 	if err := ac.selectAndUpdateOrders(ctx); err != nil {
@@ -74,12 +75,17 @@ func (ac *Accrualer) selectAndUpdateOrders(ctx context.Context) error {
 				return nil
 			}
 
+			retryAfter := 0
 			for _, order := range orders {
-				response, err := ac.checkOrderAccrual(client, order)
+				response, err, retryAfter := ac.checkOrderAccrual(client, order)
 				if err != nil {
 					zap.L().Info("error failed to check order accrual %w", zap.Error(err))
 
 					continue
+				}
+
+				if retryAfter > 0 {
+					break
 				}
 
 				err = ac.updateOrder(ctx, order, response)
@@ -88,6 +94,10 @@ func (ac *Accrualer) selectAndUpdateOrders(ctx context.Context) error {
 
 					continue
 				}
+			}
+
+			if retryAfter > 0 {
+				time.Sleep(time.Duration(retryAfter) * time.Second)
 			}
 
 			return nil
@@ -116,23 +126,37 @@ func (ac *Accrualer) initClient() *resty.Client {
 	return client
 }
 
-func (ac *Accrualer) checkOrderAccrual(client *resty.Client, order entities.Order) (models.AccrualAPIGetOrderResponse, error) {
+func (ac *Accrualer) checkOrderAccrual(client *resty.Client, order entities.Order) (models.AccrualAPIGetOrderResponse, error, int) {
 	url, err := ac.getOrderPath(order.Number)
 	if err != nil {
-		return models.AccrualAPIGetOrderResponse{}, err
+		return models.AccrualAPIGetOrderResponse{}, err, 0
 	}
 
 	request := client.R().SetDoNotParseResponse(true)
 
 	response, err := request.Get(url)
 	if err != nil {
-		return models.AccrualAPIGetOrderResponse{}, err
+		return models.AccrualAPIGetOrderResponse{}, err, 0
 	}
 
 	defer response.RawBody().Close()
 
+	if response.StatusCode() == http.StatusNoContent {
+		return models.AccrualAPIGetOrderResponse{
+			Number: order.Number,
+			Status: entities.OrderStatusNew,
+		}, nil, 0
+	} else if response.StatusCode() == http.StatusTooManyRequests {
+		retryAfter, err := strconv.Atoi(response.Header().Get("Retry-After"))
+		if err != nil {
+			return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("error failed to parse Retry-After value, err: %w", err), 0
+		}
+
+		return models.AccrualAPIGetOrderResponse{}, nil, retryAfter
+	}
+
 	if response.StatusCode() != http.StatusOK {
-		return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("error failed to get order accrual, invalid status: %v", response.Status())
+		return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("error failed to get order accrual, invalid status: %v", response.Status()), 0
 	}
 
 	responseOrderAccrual := models.AccrualAPIGetOrderResponse{}
@@ -140,10 +164,10 @@ func (ac *Accrualer) checkOrderAccrual(client *resty.Client, order entities.Orde
 	jsonDecoder := json.NewDecoder(response.RawBody())
 
 	if err := jsonDecoder.Decode(&responseOrderAccrual); err != nil {
-		return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("cannot decode response get order accrual to json: %w", err)
+		return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("cannot decode response get order accrual to json: %w", err), 0
 	}
 
-	return responseOrderAccrual, nil
+	return responseOrderAccrual, nil, 0
 }
 
 func (ac *Accrualer) getOrderPath(orderNumber string) (string, error) {

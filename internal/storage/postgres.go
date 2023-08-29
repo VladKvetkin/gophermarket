@@ -92,6 +92,7 @@ func (s *PostgresStorage) GetOrdersForAccrualer(ctx context.Context, offset int,
 		limit,
 		offset,
 	)
+
 	if err != nil {
 		return nil, err
 	}
