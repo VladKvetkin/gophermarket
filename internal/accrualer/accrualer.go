@@ -77,7 +77,7 @@ func (ac *Accrualer) selectAndUpdateOrders(ctx context.Context) error {
 
 			retryAfter := 0
 			for _, order := range orders {
-				response, err, retryAfter := ac.checkOrderAccrual(client, order)
+				response, retryAfter, err := ac.checkOrderAccrual(client, order)
 				if err != nil {
 					zap.L().Info("error failed to check order accrual %w", zap.Error(err))
 
@@ -116,27 +116,20 @@ func (ac *Accrualer) updateOrder(ctx context.Context, order entities.Order, upda
 }
 
 func (ac *Accrualer) initClient() *resty.Client {
-	client := resty.New()
-
-	client.
-		SetRetryCount(3).
-		SetRetryWaitTime(2 * time.Second).
-		SetRetryMaxWaitTime(10 * time.Second)
-
-	return client
+	return resty.New()
 }
 
-func (ac *Accrualer) checkOrderAccrual(client *resty.Client, order entities.Order) (models.AccrualAPIGetOrderResponse, error, int) {
+func (ac *Accrualer) checkOrderAccrual(client *resty.Client, order entities.Order) (models.AccrualAPIGetOrderResponse, int, error) {
 	url, err := ac.getOrderPath(order.Number)
 	if err != nil {
-		return models.AccrualAPIGetOrderResponse{}, err, 0
+		return models.AccrualAPIGetOrderResponse{}, 0, err
 	}
 
 	request := client.R().SetDoNotParseResponse(true)
 
 	response, err := request.Get(url)
 	if err != nil {
-		return models.AccrualAPIGetOrderResponse{}, err, 0
+		return models.AccrualAPIGetOrderResponse{}, 0, err
 	}
 
 	defer response.RawBody().Close()
@@ -145,18 +138,18 @@ func (ac *Accrualer) checkOrderAccrual(client *resty.Client, order entities.Orde
 		return models.AccrualAPIGetOrderResponse{
 			Number: order.Number,
 			Status: entities.OrderStatusNew,
-		}, nil, 0
+		}, 0, nil
 	} else if response.StatusCode() == http.StatusTooManyRequests {
 		retryAfter, err := strconv.Atoi(response.Header().Get("Retry-After"))
 		if err != nil {
-			return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("error failed to parse Retry-After value, err: %w", err), 0
+			return models.AccrualAPIGetOrderResponse{}, 0, fmt.Errorf("error failed to parse Retry-After value, err: %w", err)
 		}
 
-		return models.AccrualAPIGetOrderResponse{}, nil, retryAfter
+		return models.AccrualAPIGetOrderResponse{}, retryAfter, nil
 	}
 
 	if response.StatusCode() != http.StatusOK {
-		return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("error failed to get order accrual, invalid status: %v", response.Status()), 0
+		return models.AccrualAPIGetOrderResponse{}, 0, fmt.Errorf("error failed to get order accrual, invalid status: %v", response.Status())
 	}
 
 	responseOrderAccrual := models.AccrualAPIGetOrderResponse{}
@@ -164,10 +157,10 @@ func (ac *Accrualer) checkOrderAccrual(client *resty.Client, order entities.Orde
 	jsonDecoder := json.NewDecoder(response.RawBody())
 
 	if err := jsonDecoder.Decode(&responseOrderAccrual); err != nil {
-		return models.AccrualAPIGetOrderResponse{}, fmt.Errorf("cannot decode response get order accrual to json: %w", err), 0
+		return models.AccrualAPIGetOrderResponse{}, 0, fmt.Errorf("cannot decode response get order accrual to json: %w", err)
 	}
 
-	return responseOrderAccrual, nil, 0
+	return responseOrderAccrual, 0, nil
 }
 
 func (ac *Accrualer) getOrderPath(orderNumber string) (string, error) {
